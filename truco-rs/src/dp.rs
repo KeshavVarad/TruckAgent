@@ -159,7 +159,10 @@ pub fn solve_match(cfg: &SolveConfig) -> MatchSolution {
             prune_strategy(&mut sigma, cfg.prune_threshold);
 
             // Estimate V via self-play (used by deeper-depth states as terminal value).
-            let v = self_play_value(&sigma, cfg.eval_samples, &mut rng, (s0, s1), lead);
+            // self_play_value uses V_table at round-end terminals so the resulting
+            // V_table[s] is match-win probability — matching what CFR's terminal
+            // value function consumes.
+            let v = self_play_value(&sigma, cfg.eval_samples, &mut rng, (s0, s1), lead, &vt_snapshot);
 
             // Final exploitability (re-measure for the report).
             let (_, _, final_exploit) = sampled_exploitability(
@@ -216,16 +219,18 @@ fn self_play_value<R: Rng>(
     rng: &mut R,
     score: (u8, u8),
     lead: u8,
+    vt: &HashMap<(u8, u8, u8), f64>,
 ) -> f64 {
     let mut total = 0.0;
     for _ in 0..n {
         let s = deal(rng, lead, score);
-        total += self_play_one(sigma, rng, s);
+        total += self_play_one(sigma, rng, s, vt);
     }
     total / n as f64
 }
 
-fn self_play_one<R: Rng>(sigma: &StrategyTable, rng: &mut R, mut s: State) -> f64 {
+fn self_play_one<R: Rng>(sigma: &StrategyTable, rng: &mut R, mut s: State,
+                         vt: &HashMap<(u8, u8, u8), f64>) -> f64 {
     while !s.is_terminal {
         let legal = legal_actions(&s);
         let mr = s.manilha_rank;
@@ -262,6 +267,22 @@ fn self_play_one<R: Rng>(sigma: &StrategyTable, rng: &mut R, mut s: State) -> f6
         let (_, a) = by_key[chosen];
         s = step(&s, a);
     }
+    // Match-value at round end (computed identically to CFR's terminal value),
+    // so V_table[(s, lead)] stores match-win probability — what CFR's terminal
+    // value function expects, not raw stake.
     let o = s.outcome.unwrap();
-    if o.winner == 0 { o.stake_awarded as f64 } else { -(o.stake_awarded as f64) }
+    let stake = o.stake_awarded;
+    let new_score = if o.winner == 0 {
+        (s.score.0 + stake, s.score.1)
+    } else {
+        (s.score.0, s.score.1 + stake)
+    };
+    let next_lead = 1 - s.first_trick_starter;
+    if new_score.0 >= WIN_SCORE {
+        1.0
+    } else if new_score.1 >= WIN_SCORE {
+        -1.0
+    } else {
+        *vt.get(&(new_score.0, new_score.1, next_lead)).unwrap_or(&0.0)
+    }
 }
