@@ -1,0 +1,34 @@
+# Training artifacts — most are too big for git
+artifacts/*.msgpack
+artifacts/*.msgpack.gz
+artifacts/*.pkl
+artifacts/*.pt
+artifacts/*.log
+artifacts/*.txt
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.python-version
+*.egg-info/
+.venv/
+venv/
+
+# Rust
+truco-rs/target/
+
+# macOS
+.DS_Store
+
+# Editor/IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Local-only
+/tmp/
+.claude/
+
