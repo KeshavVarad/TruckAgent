@@ -168,26 +168,27 @@ fn main() -> std::io::Result<()> {
     if let Some(parent) = args.out.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let mut buf = Vec::new();
-    bundle.serialize(&mut rmp_serde::Serializer::new(&mut buf).with_struct_map())
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-
-    // gzip if the path ends in .gz; otherwise write raw msgpack.
+    // Stream-serialize directly into the writer to avoid building a multi-GB
+    // buffer in RAM. With ~200M entries the in-memory buffer was OOMing.
     let path_str = args.out.to_string_lossy();
-    let bytes_written: usize;
-    if path_str.ends_with(".gz") {
+    let bytes_written: u64 = if path_str.ends_with(".gz") {
         let f = File::create(&args.out)?;
-        let mut enc = GzEncoder::new(f, Compression::default());
-        enc.write_all(&buf)?;
+        let enc = GzEncoder::new(f, Compression::default());
+        let mut ser = rmp_serde::Serializer::new(enc).with_struct_map();
+        bundle.serialize(&mut ser)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        let enc = ser.into_inner();
         let f = enc.finish()?;
-        bytes_written = f.metadata()?.len() as usize;
+        f.metadata()?.len()
     } else {
-        let mut f = File::create(&args.out)?;
-        f.write_all(&buf)?;
-        bytes_written = buf.len();
-    }
-    eprintln!("[train] wrote {} ({} bytes on disk, {} uncompressed)",
-              args.out.display(), bytes_written, buf.len());
+        let f = File::create(&args.out)?;
+        let mut ser = rmp_serde::Serializer::new(f).with_struct_map();
+        bundle.serialize(&mut ser)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        let f = ser.into_inner();
+        f.metadata()?.len()
+    };
+    eprintln!("[train] wrote {} ({} bytes on disk)", args.out.display(), bytes_written);
 
     let avg_exp: f64 = sol.exploitability.values().sum::<f64>() / sol.exploitability.len() as f64;
     let max_exp = sol.exploitability.values().cloned().fold(f64::NEG_INFINITY, f64::max);
